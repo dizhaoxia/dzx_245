@@ -1,0 +1,76 @@
+:root {
+  --bg-primary: #0f0f13;
+  --bg-secondary: #1a1a24;
+  --bg-tertiary: #22222e;
+  --border-color: #2a2a3a;
+  --border-hover: #3a3a4a;
+  --text-primary: #f0f0f5;
+  --text-secondary: #9898a8;
+  --text-muted: #6a6a7a;
+  --accent: #ff6b2b;
+  --accent-hover: #ff8a50;
+  --accent-glow: rgba(255, 107, 43, 0.25);
+  --danger: #ff4757;
+  --danger-hover: #ff6b7a;
+  --success: #2ed573;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --font-display: 'Outfit', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --shadow-card: 0 2px 12px rgba(0,0,0,0.3);
+  --shadow-glow: 0 0 20px var(--accent-glow);
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  width: 100%;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse at 20% 0%, rgba(255,107,43,0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(255,107,43,0.03) 0%, transparent 50%);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.ghost-drag {
+  opacity: 0.4;
+  background: var(--accent-glow);
+  border: 1px dashed var(--accent);
+}
