@@ -15,6 +15,7 @@ export function useVideoMerger() {
   const mergeStatus = ref('')
   const outputUrl = ref<string | null>(null)
   const outputFileName = ref('merged_output.mp4')
+  const ffmpegLogs = ref<string[]>([])
 
   const {
     isLoaded: ffmpegLoaded,
@@ -24,7 +25,9 @@ export function useVideoMerger() {
     concatVideos,
     writeFile,
     readFile,
-    deleteFile
+    deleteFile,
+    setLogCallback,
+    setProgressCallback
   } = useFFmpeg()
 
   const hasVideos = computed(() => videos.value.length > 0)
@@ -128,14 +131,52 @@ export function useVideoMerger() {
     mergeProgress.value = 0
     mergeStatus.value = '正在加载 FFmpeg...'
     outputFileName.value = `merged_output.${outputConfig.value.format}`
+    ffmpegLogs.value = []
 
     if (outputUrl.value) {
       URL.revokeObjectURL(outputUrl.value)
       outputUrl.value = null
     }
 
+    let currentVideoIndex = 0
+    let currentVideoDuration = 0
+    const processWeight = 85
+
+    setLogCallback((message) => {
+      ffmpegLogs.value.push(message)
+      if (ffmpegLogs.value.length > 100) {
+        ffmpegLogs.value.shift()
+      }
+      console.log('[FFmpeg]', message)
+    })
+
+    let lastUpdateTime = 0
+    setProgressCallback((progress) => {
+      if (typeof progress !== 'number' || progress <= 0 || currentVideoDuration <= 0) return
+
+      const now = Date.now()
+      if (now - lastUpdateTime < 100) return
+      lastUpdateTime = now
+
+      let videoProgress: number
+      if (progress <= 1) {
+        videoProgress = Math.min(1, progress)
+      } else {
+        videoProgress = Math.min(1, progress / currentVideoDuration)
+      }
+
+      const baseProgress = (currentVideoIndex / videos.value.length) * processWeight
+      const videoContribution = (videoProgress / videos.value.length) * processWeight
+      const newProgress = Math.round(baseProgress + videoContribution)
+
+      if (newProgress > mergeProgress.value) {
+        mergeProgress.value = newProgress
+      }
+    })
+
     try {
       if (!ffmpegLoaded.value) {
+        mergeStatus.value = '正在加载 FFmpeg 核心组件...'
         await loadFFmpeg()
       }
 
@@ -146,36 +187,50 @@ export function useVideoMerger() {
 
       for (let i = 0; i < total; i++) {
         const video = videos.value[i]
-        const ext = video.name.split('.').pop() || 'mp4'
+        currentVideoIndex = i
+        currentVideoDuration = video.trimEnd - video.trimStart
+
+        const ext = (video.name.split('.').pop() || 'mp4').toLowerCase()
         const inputPath = `input_${i}.${ext}`
         const segmentPath = `segment_${i}.${format}`
 
-        mergeStatus.value = `正在处理第 ${i + 1}/${total} 段视频...`
-        mergeProgress.value = Math.round(((i) / total) * 85)
+        mergeStatus.value = `正在处理第 ${i + 1}/${total} 段视频: ${video.name}`
+        mergeProgress.value = Math.round((i / total) * processWeight)
         video.isProcessing = true
 
+        console.log(`[Merge] Processing video ${i + 1}/${total}:`, video.name, 'trim:', video.trimStart, '-', video.trimEnd)
         await writeFile(inputPath, video.file)
+        console.log(`[Merge] Written input file: ${inputPath}`)
 
-        await trimAndNormalizeVideo(
-          inputPath,
-          segmentPath,
-          video.trimStart,
-          video.trimEnd,
-          preset,
-          outputConfig.value.keepAudio,
-          format
-        )
+        try {
+          await trimAndNormalizeVideo(
+            inputPath,
+            segmentPath,
+            video.trimStart,
+            video.trimEnd,
+            preset,
+            outputConfig.value.keepAudio,
+            format
+          )
+          console.log(`[Merge] Completed processing: ${segmentPath}`)
+        } catch (procError) {
+          console.error(`[Merge] Failed to process video ${video.name}:`, procError)
+          throw new Error(`处理视频 "${video.name}" 失败: ${procError instanceof Error ? procError.message : '未知错误'}`)
+        }
 
         segmentPaths.push(segmentPath)
         await deleteFile(inputPath)
         video.isProcessing = false
       }
 
+      currentVideoIndex = total
       mergeStatus.value = '正在拼接视频...'
       mergeProgress.value = 88
 
+      console.log('[Merge] Concatenating segments:', segmentPaths)
       const finalPath = `output.${format}`
       await concatVideos(segmentPaths, finalPath, format)
+      console.log('[Merge] Concatenation complete')
 
       for (const p of segmentPaths) {
         await deleteFile(p)
@@ -185,7 +240,10 @@ export function useVideoMerger() {
       mergeStatus.value = '正在生成下载文件...'
       mergeProgress.value = 95
 
+      console.log('[Merge] Reading output file...')
       const data = await readFile(finalPath)
+      console.log('[Merge] File size:', data.length, 'bytes')
+
       const mimeType = format === 'webm' ? 'video/webm' : 'video/mp4'
       const blob = new Blob([data], { type: mimeType })
       outputUrl.value = URL.createObjectURL(blob)
@@ -194,12 +252,17 @@ export function useVideoMerger() {
 
       mergeProgress.value = 100
       mergeStatus.value = '合并完成！'
+      console.log('[Merge] Complete!')
     } catch (e) {
-      console.error('Merge failed:', e)
-      mergeStatus.value = `合并失败: ${e instanceof Error ? e.message : '未知错误'}`
+      console.error('[Merge] Failed:', e)
+      const errorMsg = e instanceof Error ? e.message : '未知错误'
+      mergeStatus.value = `合并失败: ${errorMsg}`
       mergeProgress.value = 0
+      videos.value.forEach(v => v.isProcessing = false)
     } finally {
       isMerging.value = false
+      setLogCallback(null)
+      setProgressCallback(null)
     }
   }
 
@@ -230,6 +293,7 @@ export function useVideoMerger() {
     mergeStatus,
     outputUrl,
     outputFileName,
+    ffmpegLogs,
     hasVideos,
     canMerge,
     isLoadingFFmpeg,
