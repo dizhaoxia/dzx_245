@@ -1,10 +1,23 @@
 import { ref } from 'vue'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { toBlobURL, fetchFile } from '@ffmpeg/util'
-import type { QualityPreset } from '@/types'
+import type { QualityPreset, AudioMode, AdvancedOutputConfig } from '@/types'
 
 export type LogCallback = (message: string) => void
 export type ProgressCallback = (progress: number) => void
+
+export interface EncodingOptions {
+  resolution: string
+  frameRate: string
+  videoBitrate: string
+  audioBitrate: string
+  videoCodec: string
+  audioCodec: string
+  audioMode: AudioMode
+  format: string
+  segmentIndex?: number
+  totalSegments?: number
+}
 
 const ffmpeg = new FFmpeg()
 const isLoaded = ref(false)
@@ -59,6 +72,38 @@ ffmpeg.on('progress', ({ progress }) => {
     progressCallback(progress)
   }
 })
+
+const getCodecOptions = (codec: string, isVideo: boolean, _format: string) => {
+  const args: string[] = []
+
+  if (isVideo) {
+    if (codec === 'libx264') {
+      args.push('-preset', 'veryfast')
+      args.push('-crf', '23')
+      args.push('-pix_fmt', 'yuv420p')
+    } else if (codec === 'libx265') {
+      args.push('-preset', 'fast')
+      args.push('-crf', '28')
+      args.push('-pix_fmt', 'yuv420p')
+      args.push('-tag:v', 'hvc1')
+    } else if (codec === 'libvpx-vp9') {
+      args.push('-deadline', 'realtime')
+      args.push('-cpu-used', '4')
+      args.push('-crf', '30')
+    }
+  } else {
+    if (codec === 'aac') {
+      args.push('-profile:a', 'aac_low')
+    } else if (codec === 'libmp3lame') {
+      args.push('-q:a', '2')
+    } else if (codec === 'libopus') {
+      args.push('-vbr', 'on')
+      args.push('-compression_level', '10')
+    }
+  }
+
+  return args
+}
 
 export function useFFmpeg() {
   const setLogCallback = (cb: LogCallback | null) => {
@@ -117,35 +162,43 @@ export function useFFmpeg() {
     end: number,
     preset: QualityPreset,
     keepAudio: boolean,
-    format: string
+    format: string,
+    advanced?: AdvancedOutputConfig,
+    audioMode?: AudioMode,
+    segmentIndex?: number,
+    _totalSegments?: number
   ) => {
     const duration = end - start
     const isWebm = format === 'webm'
-    const codec = isWebm ? 'libvpx-vp9' : 'libx264'
-    const audioCodec = isWebm ? 'libopus' : 'aac'
+
+    const useAdvanced = advanced?.useAdvanced
+    const resolution = useAdvanced ? advanced!.resolution : preset.resolution
+    const frameRate = useAdvanced ? advanced!.frameRate : '30'
+    const videoBitrate = useAdvanced ? advanced!.videoBitrate : preset.bitrate
+    const audioBitrate = useAdvanced ? advanced!.audioBitrate : '128k'
+    const videoCodec = useAdvanced ? advanced!.videoCodec : (isWebm ? 'libvpx-vp9' : 'libx264')
+    const audioCodec = useAdvanced ? advanced!.audioCodec : (isWebm ? 'libopus' : 'aac')
+
+    const resolvedAudioMode = audioMode || 'mix'
+    const shouldKeepAudio = keepAudio && resolvedAudioMode !== 'mute'
 
     const args = [
       '-i', inputPath,
       '-ss', String(start),
       '-t', String(duration),
-      '-c:v', codec,
-      '-b:v', preset.bitrate,
-      '-s', preset.resolution,
-      '-r', '30',
-      '-pix_fmt', 'yuv420p',
+      '-c:v', videoCodec,
+      '-b:v', videoBitrate,
+      '-s', resolution,
+      '-r', frameRate,
     ]
 
-    if (!isWebm) {
-      args.push('-preset', 'veryfast')
-      args.push('-crf', '23')
-    } else {
-      args.push('-deadline', 'realtime')
-      args.push('-cpu-used', '4')
-      args.push('-crf', '30')
-    }
+    args.push(...getCodecOptions(videoCodec, true, format))
 
-    if (keepAudio) {
-      args.push('-c:a', audioCodec, '-b:a', '128k')
+    if (resolvedAudioMode === 'first' && segmentIndex !== undefined && segmentIndex > 0) {
+      args.push('-an')
+    } else if (shouldKeepAudio) {
+      args.push('-c:a', audioCodec, '-b:a', audioBitrate)
+      args.push(...getCodecOptions(audioCodec, false, format))
     } else {
       args.push('-an')
     }
@@ -161,12 +214,34 @@ export function useFFmpeg() {
     await ffmpeg.exec(args)
   }
 
-  const concatVideos = async (inputPaths: string[], outputPath: string, format: string) => {
+  const concatVideos = async (
+    inputPaths: string[],
+    outputPath: string,
+    format: string,
+    audioMode: AudioMode = 'mix'
+  ) => {
     const concatContent = inputPaths.map(p => `file '${p}'`).join('\n')
     console.log('[FFmpeg] Concat list:', concatContent)
     await ffmpeg.writeFile('concat_list.txt', concatContent)
 
-    const args = ['-f', 'concat', '-safe', '0', '-i', 'concat_list.txt', '-c', 'copy']
+    const args = ['-f', 'concat', '-safe', '0', '-i', 'concat_list.txt']
+
+    if (audioMode === 'mix' && inputPaths.length > 1) {
+      const filterInputs: string[] = []
+      for (let i = 0; i < inputPaths.length; i++) {
+        filterInputs.push(`[${i}:a]`)
+      }
+      args.push(
+        '-filter_complex',
+        `${filterInputs.join('')}concat=n=${inputPaths.length}:v=1:a=1[outv][outa]`,
+        '-map', '[outv]',
+        '-map', '[outa]'
+      )
+      args.push('-c:v', 'copy')
+      args.push('-c:a', 'aac', '-b:a', '128k')
+    } else {
+      args.push('-c', 'copy')
+    }
 
     if (format === 'mp4') {
       args.push('-movflags', '+faststart')
@@ -179,29 +254,36 @@ export function useFFmpeg() {
     await ffmpeg.exec(args)
   }
 
-  const transcode = async (inputPath: string, outputPath: string, bitrate: string, resolution: string, keepAudio: boolean, format: string) => {
+  const transcode = async (
+    inputPath: string,
+    outputPath: string,
+    bitrate: string,
+    resolution: string,
+    keepAudio: boolean,
+    format: string,
+    advanced?: AdvancedOutputConfig
+  ) => {
     const isWebm = format === 'webm'
-    const codec = isWebm ? 'libvpx-vp9' : 'libx264'
-    const audioCodec = isWebm ? 'libopus' : 'aac'
+    const useAdvanced = advanced?.useAdvanced
+    const videoCodec = useAdvanced ? advanced!.videoCodec : (isWebm ? 'libvpx-vp9' : 'libx264')
+    const audioCodec = useAdvanced ? advanced!.audioCodec : (isWebm ? 'libopus' : 'aac')
+    const frameRate = useAdvanced ? advanced!.frameRate : '30'
+    const finalBitrate = useAdvanced ? advanced!.videoBitrate : bitrate
+    const audioBitrate = useAdvanced ? advanced!.audioBitrate : '128k'
 
     const args = [
       '-i', inputPath,
-      '-c:v', codec,
-      '-b:v', bitrate,
+      '-c:v', videoCodec,
+      '-b:v', finalBitrate,
       '-s', resolution,
-      '-r', '30',
-      '-pix_fmt', 'yuv420p',
+      '-r', frameRate,
     ]
 
-    if (!isWebm) {
-      args.push('-preset', 'veryfast')
-    } else {
-      args.push('-deadline', 'realtime')
-      args.push('-cpu-used', '4')
-    }
+    args.push(...getCodecOptions(videoCodec, true, format))
 
     if (keepAudio) {
-      args.push('-c:a', audioCodec, '-b:a', '128k')
+      args.push('-c:a', audioCodec, '-b:a', audioBitrate)
+      args.push(...getCodecOptions(audioCodec, false, format))
     } else {
       args.push('-an')
     }
@@ -215,6 +297,69 @@ export function useFFmpeg() {
 
     console.log('[FFmpeg] Transcode exec:', args.join(' '))
     await ffmpeg.exec(args)
+  }
+
+  const extractAudio = async (
+    inputPath: string,
+    outputPath: string,
+    audioCodec: string,
+    bitrate: string
+  ) => {
+    const args = [
+      '-i', inputPath,
+      '-vn',
+      '-c:a', audioCodec,
+      '-b:a', bitrate,
+      '-y',
+      outputPath
+    ]
+
+    console.log('[FFmpeg] Extract audio exec:', args.join(' '))
+    await ffmpeg.exec(args)
+  }
+
+  const probeVideo = async (inputPath: string): Promise<{
+    width: number
+    height: number
+    duration: number
+    videoCodec: string
+    audioCodec: string | null
+    hasAudio: boolean
+  }> => {
+    return new Promise((resolve, reject) => {
+      let output = ''
+      const originalCallback = logCallback
+
+      logCallback = (msg) => {
+        output += msg + '\n'
+        if (originalCallback) originalCallback(msg)
+      }
+
+      const args = ['-v', 'info', '-i', inputPath, '-f', 'null', '-']
+
+      ffmpeg.exec(args).then(() => {
+        logCallback = originalCallback
+
+        const widthMatch = output.match(/Stream.*Video:.* (\d{2,5})x(\d{2,5})/)
+        const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})/)
+        const videoCodecMatch = output.match(/Stream.*Video: (\w+)/)
+        const audioMatch = output.match(/Stream.*Audio: (\w+)/)
+
+        resolve({
+          width: widthMatch ? parseInt(widthMatch[1]) : 0,
+          height: widthMatch ? parseInt(widthMatch[2]) : 0,
+          duration: durationMatch
+            ? parseInt(durationMatch[1]) * 3600 + parseInt(durationMatch[2]) * 60 + parseFloat(durationMatch[3])
+            : 0,
+          videoCodec: videoCodecMatch ? videoCodecMatch[1] : 'unknown',
+          audioCodec: audioMatch ? audioMatch[1] : null,
+          hasAudio: !!audioMatch
+        })
+      }).catch((e) => {
+        logCallback = originalCallback
+        reject(e)
+      })
+    })
   }
 
   const writeFile = async (path: string, data: File | Uint8Array) => {
@@ -239,6 +384,14 @@ export function useFFmpeg() {
     }
   }
 
+  const checkMemoryUsage = (): { used: number; available: number; percentage: number } => {
+    const perfMemory = (performance as any).memory
+    const used = perfMemory?.usedJSHeapSize || 0
+    const available = perfMemory?.jsHeapSizeLimit || 0
+    const percentage = available > 0 ? (used / available) * 100 : 0
+    return { used, available, percentage }
+  }
+
   return {
     ffmpeg,
     isLoaded,
@@ -248,10 +401,13 @@ export function useFFmpeg() {
     trimAndNormalizeVideo,
     concatVideos,
     transcode,
+    extractAudio,
+    probeVideo,
     writeFile,
     readFile,
     deleteFile,
     setLogCallback,
-    setProgressCallback
+    setProgressCallback,
+    checkMemoryUsage
   }
 }

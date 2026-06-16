@@ -4,6 +4,7 @@ import VideoUploader from '@/components/VideoUploader.vue'
 import VideoList from '@/components/VideoList.vue'
 import OutputConfig from '@/components/OutputConfig.vue'
 import MergePanel from '@/components/MergePanel.vue'
+import ErrorToast from '@/components/ErrorToast.vue'
 
 const {
   videos,
@@ -13,14 +14,21 @@ const {
   mergeStatus,
   outputUrl,
   outputFileName,
+  currentError,
+  estimatedSize,
+  estimatedTimeRemaining,
+  currentProcessingVideo,
+  progressState,
   canMerge,
   addVideos,
   removeVideo,
   updateTrim,
   moveVideo,
   reorderVideos,
+  updateOutputConfig,
   merge,
-  download
+  download,
+  clearError
 } = useVideoMerger()
 </script>
 
@@ -60,6 +68,8 @@ const {
           <OutputConfig
             v-model:config="outputConfig"
             :disabled="isMerging"
+            :estimated-size="estimatedSize"
+            @update:config="updateOutputConfig"
           />
           <MergePanel
             :can-merge="canMerge"
@@ -68,12 +78,22 @@ const {
             :status="mergeStatus"
             :has-output="!!outputUrl"
             :output-file-name="outputFileName"
+            :current-video-name="currentProcessingVideo"
+            :current-video-progress="progressState?.currentVideoProgress"
+            :estimated-time-remaining="estimatedTimeRemaining"
             @merge="merge"
             @download="download"
           />
         </section>
       </div>
     </main>
+
+    <ErrorToast
+      :error="currentError"
+      :auto-close="true"
+      :duration="10000"
+      @close="clearError"
+    />
   </div>
 </template>
 

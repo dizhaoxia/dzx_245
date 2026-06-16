@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { VideoItem } from '@/types'
+import TimelineTrimmer from './TimelineTrimmer.vue'
 
 const props = defineProps<{
   video: VideoItem
@@ -15,10 +16,7 @@ const emit = defineEmits<{
   move: [index: number, direction: 'up' | 'down']
 }>()
 
-const videoRef = ref<HTMLVideoElement | null>(null)
-const isPlaying = ref(false)
-const currentTime = ref(0)
-const showPreview = ref(false)
+const showTrimmer = ref(false)
 
 const formatTime = (seconds: number): string => {
   const m = Math.floor(seconds / 60)
@@ -28,92 +26,43 @@ const formatTime = (seconds: number): string => {
 }
 
 const trimDuration = computed(() => props.video.trimEnd - props.video.trimStart)
+const originalSize = computed(() => formatFileSize(props.video.fileSize))
+const trimmedRatio = computed(() => ((trimDuration.value / props.video.duration) * 100).toFixed(1))
 
-const startPercent = computed(() => (props.video.trimStart / props.video.duration) * 100)
-const endPercent = computed(() => (props.video.trimEnd / props.video.duration) * 100)
-const currentPercent = computed(() => (currentTime.value / props.video.duration) * 100)
-
-const handleTrimStart = (event: Event) => {
-  const val = parseFloat((event.target as HTMLInputElement).value)
-  if (!isNaN(val)) {
-    emit('update-trim', props.video.id, val, props.video.trimEnd)
-  }
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
-const handleTrimEnd = (event: Event) => {
-  const val = parseFloat((event.target as HTMLInputElement).value)
-  if (!isNaN(val)) {
-    emit('update-trim', props.video.id, props.video.trimStart, val)
-  }
+const handleUpdateTrim = (start: number, end: number) => {
+  emit('update-trim', props.video.id, start, end)
 }
 
-const handleTimelineClick = (e: MouseEvent) => {
-  if (!videoRef.value) return
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  const percent = (e.clientX - rect.left) / rect.width
-  const newTime = percent * props.video.duration
-  videoRef.value.currentTime = Math.max(props.video.trimStart, Math.min(props.video.trimEnd, newTime))
+const toggleTrimmer = () => {
+  showTrimmer.value = !showTrimmer.value
 }
 
-const togglePlay = () => {
-  if (!videoRef.value) return
-  if (isPlaying.value) {
-    videoRef.value.pause()
-  } else {
-    videoRef.value.currentTime = props.video.trimStart
-    videoRef.value.play()
-  }
-}
-
-const onTimeUpdate = () => {
-  if (!videoRef.value) return
-  currentTime.value = videoRef.value.currentTime
-  if (videoRef.value.currentTime >= props.video.trimEnd) {
-    videoRef.value.pause()
-    videoRef.value.currentTime = props.video.trimStart
-  }
-}
-
-const onPlay = () => {
-  isPlaying.value = true
-}
-
-const onPause = () => {
-  isPlaying.value = false
-}
-
-const togglePreview = () => {
-  showPreview.value = !showPreview.value
-  if (!showPreview.value && videoRef.value) {
-    videoRef.value.pause()
-  }
+const handleSeek = (time: number) => {
+  console.log('[VideoCard] Seek to:', time)
 }
 </script>
 
 <template>
-  <div class="video-card" :class="{ processing: video.isProcessing, expanded: showPreview }">
+  <div class="video-card" :class="{ processing: video.isProcessing, expanded: showTrimmer }">
     <div class="card-index">{{ index + 1 }}</div>
 
-    <div class="card-thumb" @click="togglePreview">
-      <img v-if="video.thumbnailUrl && !showPreview" :src="video.thumbnailUrl" alt="thumbnail" />
-      <div v-else-if="!showPreview" class="thumb-placeholder">
+    <div class="card-thumb" @click="toggleTrimmer">
+      <img v-if="video.thumbnailUrl && !showTrimmer" :src="video.thumbnailUrl" alt="thumbnail" />
+      <div v-else-if="!showTrimmer" class="thumb-placeholder">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <polygon points="5 3 19 12 5 21 5 3"/>
         </svg>
       </div>
-      <video
-        v-if="showPreview"
-        ref="videoRef"
-        :src="video.objectUrl"
-        class="preview-video"
-        @timeupdate="onTimeUpdate"
-        @play="onPlay"
-        @pause="onPause"
-        muted
-        playsinline
-      />
       <span class="duration-badge">{{ formatTime(video.duration) }}</span>
-      <div class="play-overlay" v-if="!showPreview">
+      <div class="play-overlay" v-if="!showTrimmer">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
           <polygon points="5 3 19 12 5 21 5 3"/>
         </svg>
@@ -123,74 +72,76 @@ const togglePreview = () => {
     <div class="card-body">
       <div class="card-header">
         <div class="card-name" :title="video.name">{{ video.name }}</div>
-        <button class="preview-toggle" @click="togglePreview" :disabled="isMerging">
-          <svg v-if="!showPreview" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-            <circle cx="12" cy="12" r="3"/>
+        <button class="trimmer-toggle" @click.stop="toggleTrimmer" :disabled="isMerging">
+          <svg v-if="!showTrimmer" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12,8 L12,16"/>
+            <path d="M8,12 L16,12"/>
+            <circle cx="12" cy="12" r="9"/>
           </svg>
           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="18 15 12 9 6 15"/>
           </svg>
-          <span>{{ showPreview ? '收起' : '预览' }}</span>
+          <span>{{ showTrimmer ? '收起裁剪' : '裁剪' }}</span>
         </button>
       </div>
 
-      <div v-if="showPreview" class="preview-controls">
-        <button class="play-btn" @click="togglePlay" :disabled="isMerging">
-          <svg v-if="!isPlaying" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <polygon points="5 3 19 12 5 21 5 3"/>
+      <div class="card-meta">
+        <div class="meta-item">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22,11.08 V11.08 A10,10,0,1,1,12.92,2 h0 A9,9,0,0,0,22,11.08 Z"/>
+            <polyline points="12,6 12,12 16,14"/>
           </svg>
-          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="4" width="4" height="16"/>
-            <rect x="14" y="4" width="4" height="16"/>
+          <span>{{ formatTime(trimDuration) }}</span>
+        </div>
+        <div class="meta-item">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21,15v4a2,2,0,0,1-2,2H5a2,2,0,0,1-2-2v-4"/>
+            <polyline points="7,10 12,15 17,10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
-        </button>
-        <span class="time-display">{{ formatTime(currentTime) }} / {{ formatTime(trimDuration) }}</span>
+          <span>{{ originalSize }}</span>
+        </div>
+        <div class="meta-item" :class="{ 'trim-active': trimDuration < video.duration }">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14,2 L6,6 l0,12 l8,4 l0,-16 Z"/>
+            <path d="M6,6 l12,12"/>
+          </svg>
+          <span>{{ trimmedRatio }}%</span>
+        </div>
       </div>
 
-      <div class="timeline" @click="handleTimelineClick">
+      <div v-if="!showTrimmer" class="timeline-preview">
         <div class="timeline-track">
-          <div class="timeline-trim" :style="{ left: startPercent + '%', width: (endPercent - startPercent) + '%' }"/>
-          <div v-if="showPreview" class="timeline-playhead" :style="{ left: currentPercent + '%' }"/>
+          <div
+            class="timeline-trim"
+            :style="{
+              left: (video.trimStart / video.duration * 100) + '%',
+              width: ((video.trimEnd - video.trimStart) / video.duration * 100) + '%'
+            }"
+          />
         </div>
-        <div class="timeline-markers">
-          <span class="marker-start">{{ formatTime(video.trimStart) }}</span>
-          <span class="marker-end">{{ formatTime(video.trimEnd) }}</span>
+        <div class="timeline-labels">
+          <span>{{ formatTime(video.trimStart) }}</span>
+          <span>{{ formatTime(video.trimEnd) }}</span>
         </div>
       </div>
 
-      <div class="trim-controls">
-        <div class="trim-field">
-          <label>开始</label>
-          <input
-            type="number"
-            :value="video.trimStart"
-            :min="0"
-            :max="video.trimEnd"
-            :step="0.1"
+      <Transition name="trimmer">
+        <div v-if="showTrimmer" class="trimmer-container">
+          <TimelineTrimmer
+            :duration="video.duration"
+            :trim-start="video.trimStart"
+            :trim-end="video.trimEnd"
+            :thumbnails="video.thumbnails"
+            :waveform-data="video.waveformData"
+            :object-url="video.objectUrl"
             :disabled="isMerging"
-            class="trim-input"
-            @input="handleTrimStart($event)"
+            :show-waveform="true"
+            @update-trim="handleUpdateTrim"
+            @seek="handleSeek"
           />
         </div>
-        <div class="trim-separator">→</div>
-        <div class="trim-field">
-          <label>结束</label>
-          <input
-            type="number"
-            :value="video.trimEnd"
-            :min="video.trimStart"
-            :max="video.duration"
-            :step="0.1"
-            :disabled="isMerging"
-            class="trim-input"
-            @input="handleTrimEnd($event)"
-          />
-        </div>
-        <div class="trim-duration">
-          {{ formatTime(trimDuration) }}
-        </div>
-      </div>
+      </Transition>
     </div>
 
     <div class="card-actions">
@@ -284,8 +235,8 @@ const togglePreview = () => {
 }
 
 .video-card.expanded .card-thumb {
-  width: 180px;
-  height: 101px;
+  width: 160px;
+  height: 90px;
 }
 
 .card-thumb:hover {
@@ -293,12 +244,6 @@ const togglePreview = () => {
 }
 
 .card-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.preview-video {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -368,11 +313,11 @@ const togglePreview = () => {
   flex: 1;
 }
 
-.preview-toggle {
+.trimmer-toggle {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
+  padding: 4px 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
@@ -384,68 +329,51 @@ const togglePreview = () => {
   flex-shrink: 0;
 }
 
-.preview-toggle:hover:not(:disabled) {
+.trimmer-toggle:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
+  background: rgba(255, 107, 43, 0.1);
 }
 
-.preview-toggle:disabled {
+.trimmer-toggle:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.preview-controls {
+.card-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.play-btn {
-  width: 28px;
-  height: 28px;
+.meta-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 50%;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  flex-shrink: 0;
-}
-
-.play-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  transform: scale(1.05);
-}
-
-.play-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.time-display {
+  gap: 4px;
   font-size: 11px;
   color: var(--text-muted);
+  font-weight: 500;
   font-family: var(--font-body);
   font-variant-numeric: tabular-nums;
 }
 
-.timeline {
-  cursor: pointer;
-  padding: 4px 0;
+.meta-item.trim-active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.timeline-preview {
+  width: 100%;
 }
 
 .timeline-track {
-  height: 6px;
+  width: 100%;
+  height: 4px;
   background: var(--bg-tertiary);
-  border-radius: 3px;
+  border-radius: 2px;
   position: relative;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .timeline-trim {
@@ -453,92 +381,34 @@ const togglePreview = () => {
   top: 0;
   height: 100%;
   background: var(--accent);
-  border-radius: 3px;
-  opacity: 0.6;
+  border-radius: 2px;
+  opacity: 0.7;
 }
 
-.timeline-playhead {
-  position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 10px;
-  background: #fff;
-  border: 2px solid var(--accent);
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 2;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-}
-
-.timeline-markers {
+.timeline-labels {
   display: flex;
   justify-content: space-between;
-  margin-top: 4px;
-}
-
-.marker-start,
-.marker-end {
-  font-size: 10px;
+  margin-top: 2px;
+  font-size: 9px;
   color: var(--text-muted);
   font-family: var(--font-body);
   font-variant-numeric: tabular-nums;
 }
 
-.trim-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+.trimmer-container {
+  width: 100%;
+  margin-top: 4px;
 }
 
-.trim-field {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.trimmer-enter-active,
+.trimmer-leave-active {
+  transition: all 0.3s ease;
 }
 
-.trim-field label {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-.trim-input {
-  width: 64px;
-  height: 28px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-family: var(--font-body);
-  padding: 0 6px;
-  text-align: center;
-  transition: border-color var(--transition-fast);
-}
-
-.trim-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.trim-input:disabled {
-  opacity: 0.5;
-}
-
-.trim-separator {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.trim-duration {
-  font-size: 11px;
-  color: var(--accent);
-  font-weight: 600;
-  margin-left: 4px;
-  padding: 2px 8px;
-  background: rgba(255, 107, 43, 0.1);
-  border-radius: 10px;
+.trimmer-enter-from,
+.trimmer-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
 }
 
 .card-actions {
@@ -593,8 +463,8 @@ const togglePreview = () => {
     width: 140px;
     height: 79px;
   }
-  .trim-controls {
-    flex-wrap: wrap;
+  .card-meta {
+    gap: 8px;
   }
 }
 </style>
