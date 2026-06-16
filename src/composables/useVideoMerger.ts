@@ -498,15 +498,16 @@ export function useVideoMerger() {
       }
     })
 
+    const format = outputConfig.value.format
+    const total = videos.value.length
+
     try {
       if (!ffmpegLoaded.value) {
         mergeStatus.value = '正在加载 FFmpeg 核心组件...'
         await loadFFmpeg()
       }
 
-      const total = videos.value.length
       const segmentPaths: string[] = []
-      const format = outputConfig.value.format
       const preset = QUALITY_PRESETS[outputConfig.value.quality]
       const advanced = outputConfig.value.advanced
       const audioMode = outputConfig.value.audioMode
@@ -586,7 +587,6 @@ export function useVideoMerger() {
       for (const p of segmentPaths) {
         await deleteFile(p)
       }
-      await deleteFile('concat_list.txt')
 
       mergeStatus.value = '正在生成下载文件...'
       mergeProgress.value = 95
@@ -611,18 +611,34 @@ export function useVideoMerger() {
     } catch (e) {
       console.error('[Merge] Failed:', e)
       const errorMsg = e instanceof Error ? e.message : '未知错误'
+      const errorStr = String(errorMsg)
 
       if (!currentError.value) {
-        if (errorMsg.includes('memory') || errorMsg.includes('OOM')) {
-          showError('memory', '内存不足', '请减少视频数量或降低输出质量后重试')
+        if (errorStr.includes('memory') || errorStr.includes('OOM') || errorStr.includes('allocation')) {
+          showError('memory', '内存不足', '请减少视频数量、降低输出分辨率或码率后重试')
+        } else if (errorStr.includes('FS error') || errorStr.includes('file') || errorStr.includes('ErrnoError')) {
+          showError('memory', '文件系统错误', '可能是内存不足导致文件写入失败，请减少视频数量后重试')
+        } else if (errorStr.includes('codec') || errorStr.includes('Unsupported') || errorStr.includes('Invalid data')) {
+          showError('codec', '不支持的视频编码', '请尝试更换输出编码格式或转换输入视频格式')
         } else {
-          showError('unknown', `合并失败: ${errorMsg}`)
+          showError('ffmpeg', '视频处理失败', errorStr)
         }
       }
 
       mergeStatus.value = `合并失败: ${currentError.value?.message || errorMsg}`
       mergeProgress.value = 0
       videos.value.forEach(v => v.isProcessing = false)
+
+      try {
+        for (let i = 0; i < videos.value.length; i++) {
+          const ext = (videos.value[i].name.split('.').pop() || 'mp4').toLowerCase()
+          await deleteFile(`input_${i}.${ext}`)
+          await deleteFile(`segment_${i}.${format}`)
+        }
+        await deleteFile(`output.${format}`)
+      } catch (cleanupError) {
+        console.warn('[Merge] Cleanup failed:', cleanupError)
+      }
     } finally {
       isMerging.value = false
       setLogCallback(null)

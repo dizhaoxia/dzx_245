@@ -181,23 +181,34 @@ export function useFFmpeg() {
 
     const resolvedAudioMode = audioMode || 'mix'
     const shouldKeepAudio = keepAudio && resolvedAudioMode !== 'mute'
+    const useSilentAudio = resolvedAudioMode === 'first' && segmentIndex !== undefined && segmentIndex > 0
 
-    const args = [
-      '-i', inputPath,
-      '-ss', String(start),
-      '-t', String(duration),
+    const args: string[] = []
+
+    args.push('-ss', String(start), '-t', String(duration))
+    args.push('-i', inputPath)
+
+    if (useSilentAudio) {
+      args.push('-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo')
+    }
+
+    args.push(
       '-c:v', videoCodec,
       '-b:v', videoBitrate,
       '-s', resolution,
       '-r', frameRate,
-    ]
+      '-pix_fmt', 'yuv420p'
+    )
 
     args.push(...getCodecOptions(videoCodec, true, format))
 
-    if (resolvedAudioMode === 'first' && segmentIndex !== undefined && segmentIndex > 0) {
-      args.push('-an')
+    if (useSilentAudio) {
+      args.push('-c:a', audioCodec, '-b:a', audioBitrate, '-ar', '44100', '-ac', '2')
+      args.push(...getCodecOptions(audioCodec, false, format))
+      args.push('-shortest')
+      args.push('-map', '0:v', '-map', '1:a')
     } else if (shouldKeepAudio) {
-      args.push('-c:a', audioCodec, '-b:a', audioBitrate)
+      args.push('-c:a', audioCodec, '-b:a', audioBitrate, '-ar', '44100', '-ac', '2')
       args.push(...getCodecOptions(audioCodec, false, format))
     } else {
       args.push('-an')
@@ -220,27 +231,18 @@ export function useFFmpeg() {
     format: string,
     audioMode: AudioMode = 'mix'
   ) => {
+    const hasAudio = audioMode !== 'mute'
+
     const concatContent = inputPaths.map(p => `file '${p}'`).join('\n')
     console.log('[FFmpeg] Concat list:', concatContent)
     await ffmpeg.writeFile('concat_list.txt', concatContent)
 
     const args = ['-f', 'concat', '-safe', '0', '-i', 'concat_list.txt']
 
-    if (audioMode === 'mix' && inputPaths.length > 1) {
-      const filterInputs: string[] = []
-      for (let i = 0; i < inputPaths.length; i++) {
-        filterInputs.push(`[${i}:a]`)
-      }
-      args.push(
-        '-filter_complex',
-        `${filterInputs.join('')}concat=n=${inputPaths.length}:v=1:a=1[outv][outa]`,
-        '-map', '[outv]',
-        '-map', '[outa]'
-      )
-      args.push('-c:v', 'copy')
-      args.push('-c:a', 'aac', '-b:a', '128k')
-    } else {
-      args.push('-c', 'copy')
+    args.push('-c', 'copy')
+
+    if (!hasAudio) {
+      args.push('-an')
     }
 
     if (format === 'mp4') {
@@ -252,6 +254,8 @@ export function useFFmpeg() {
 
     console.log('[FFmpeg] Concat exec:', args.join(' '))
     await ffmpeg.exec(args)
+
+    await ffmpeg.deleteFile('concat_list.txt')
   }
 
   const transcode = async (
